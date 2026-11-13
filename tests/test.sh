@@ -78,4 +78,23 @@ grep -q "192.168.2.1" "$work/repo/club-02.rsc" || fail "last good config of the 
 [[ ! -e "$work/repo/club-02.rsc.tmp" ]] || fail "temp file left behind"
 ok "an unreachable router fails the run but keeps its last good config"
 
+# parallel: 6 routers that each take 1s finish in ~1s, not 6s
+for i in 1 2 3 4 5 6; do
+  echo "site-0$i 10.1.0.$i" >> "$ROUTERS"
+  export_v7 2026-11-13 "10.9.0.$i" > "$FAKE/10.1.0.$i.rsc"
+done
+export_v6 nov/13/2026 192.168.2.1 > "$FAKE/10.0.0.2.rsc"
+start=$SECONDS
+SSH_DELAY=1 PARALLEL=8 run || fail "parallel run failed: $(cat "$work/log")"
+took=$((SECONDS - start))
+(( took <= 3 )) || fail "8 routers with 1s each took ${took}s, exports are not parallel"
+for i in 1 2 3 4 5 6; do grep -q "10.9.0.$i" "$work/repo/site-0$i.rsc" || fail "site-0$i missing"; done
+ok "routers are exported in parallel (${took}s for 8 x 1s)"
+
+# PARALLEL=1 still works and still reports every failure
+rm "$FAKE/10.1.0.3.rsc" "$FAKE/10.1.0.5.rsc"
+if PARALLEL=1 run; then fail "exit 0 with two unreachable routers"; fi
+grep -q "failed: .*site-03" "$work/log" && grep -q "failed: .*site-05" "$work/log" || fail "not all failures reported: $(tail -1 "$work/log")"
+ok "with PARALLEL=1 every failed router is still reported"
+
 echo "$pass tests passed"
