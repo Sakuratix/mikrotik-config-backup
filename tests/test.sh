@@ -16,6 +16,10 @@ host=""; for a in "$@"; do [[ $a == *@* ]] && host="${a#*@}"; done
 f="$FAKE/$host.rsc"
 [[ -f $f ]] || { echo "ssh: connect to host $host port 22: Connection timed out" >&2; exit 255; }
 [[ -n "${SSH_DELAY:-}" ]] && sleep "$SSH_DELAY"
+cmd="${*: -1}"
+# a RouterOS 6 host doesn't understand the v7 flag
+if [[ -e "$FAKE/$host.v6" && $cmd == *show-sensitive* ]]; then echo "expected end of command (line 1 column 9)"; exit 0; fi
+if [[ -e "$FAKE/$host.v6" && $cmd != *hide-sensitive* ]]; then echo "unexpected command: $cmd" >&2; exit 1; fi
 cat "$f"
 SSH
 chmod +x "$work/bin/ssh"
@@ -96,5 +100,29 @@ rm "$FAKE/10.1.0.3.rsc" "$FAKE/10.1.0.5.rsc"
 if PARALLEL=1 run; then fail "exit 0 with two unreachable routers"; fi
 grep -q "failed: .*site-03" "$work/log" && grep -q "failed: .*site-05" "$work/log" || fail "not all failures reported: $(tail -1 "$work/log")"
 ok "with PARALLEL=1 every failed router is still reported"
+
+# RouterOS 6: falls back to hide-sensitive instead of storing a syntax error
+: > "$FAKE/10.0.0.2.v6"
+export_v6 nov/14/2026 192.168.22.1 > "$FAKE/10.0.0.2.rsc"
+PARALLEL=8 run || true
+grep -q "192.168.22.1" "$work/repo/club-02.rsc" || fail "v6 router not exported via hide-sensitive"
+grep -q "expected end of command" "$work/repo/club-02.rsc" && fail "syntax error stored as config"
+ok "RouterOS 6 falls back to hide-sensitive"
+
+# a leaked secret is never written or committed
+printf '/interface wireguard add listen-port=13231 name=wg0 private-key="cGFzc3dvcmQ="\n/user add name=admin password=hunter2\n' > "$FAKE/10.0.0.1.rsc"
+if PARALLEL=8 run; then fail "exit 0 with a secret in the export"; fi
+grep -q "core-01: export contains secret values" "$work/log" || fail "secret not reported"
+grep -q "private-key=<redacted>" "$work/log" || fail "secret field not named"
+grep -q "hunter2" "$work/log" && fail "secret value printed to the log"
+git -C "$work/repo" grep -q hunter2 HEAD -- . && fail "secret committed"
+grep -q hunter2 "$work/repo/core-01.rsc" && fail "secret written to the working copy"
+ok "exports with secrets are refused, not written, and not printed"
+
+# hidden values (show-sensitive=no leaves the key out) are fine
+printf '# 2026-11-14 03:15:02 by RouterOS 7.16.1\n/interface wireguard add listen-port=13231 name=wg0\n/ip service set www disabled=yes\n' > "$FAKE/10.0.0.1.rsc"
+PARALLEL=8 run || true
+grep -q "name=wg0" "$work/repo/core-01.rsc" || fail "clean export not written"
+ok "clean exports pass the secret check"
 
 echo "$pass tests passed"

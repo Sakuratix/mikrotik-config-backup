@@ -17,10 +17,30 @@ trap 'rm -rf "$state"' EXIT
 
 log() { printf '%s %s\n' "$(date -u +%FT%TZ)" "$*" >&2; }
 
+# Values that must never reach git. RouterOS hides them with show-sensitive=no (v7)
+# or hide-sensitive (v6), but a wrong flag or user policy would leak them silently.
+SECRET_RE='(^|[[:space:]])(password|secret|private-key|passphrase|authentication-key|pre-shared-key|wpa-pre-shared-key|wpa2-pre-shared-key|psk)=("[^"]+"|[^"[:space:]][^[:space:]]*)'
+
+ros() {  # host port command
+  ssh -n -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=yes \
+      -i "$SSH_KEY" -p "$2" "$SSH_USER@$1" "$3"
+}
+
 export_one() {  # name host port
   local name="$1" host="$2" port="${3:-22}" out="$BACKUP_REPO/$1.rsc"
-  ssh -n -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=yes \
-      -i "$SSH_KEY" -p "$port" "$SSH_USER@$host" '/export show-sensitive=no terse' > "$out.tmp" || return 1   # set -e is off inside an if-condition
+  ros "$host" "$port" '/export show-sensitive=no terse' > "$out.tmp" || return 1   # set -e is off inside an if-condition
+  # RouterOS 6 doesn't know show-sensitive and answers with a syntax error; its flag is hide-sensitive
+  if grep -qE '^(expected end of command|syntax error|bad command name)' "$out.tmp"; then
+    ros "$host" "$port" '/export hide-sensitive terse' > "$out.tmp" || return 1
+  fi
+  if grep -qE '^(expected end of command|syntax error|bad command name|failure:)' "$out.tmp"; then
+    log "$name: RouterOS rejected the export command: $(head -1 "$out.tmp")"; return 1
+  fi
+  if grep -qiE "$SECRET_RE" "$out.tmp"; then
+    log "$name: export contains secret values, refusing to write it (check the export flags and the user's policy)"
+    grep -oiE "$SECRET_RE" "$out.tmp" | sed -E 's/=.*/=<redacted>/' | sort -u | head -5 >&2
+    return 1
+  fi
   # RouterOS puts a timestamp in the first line: drop it, or every run is a diff
   sed -i -E '1{/^# [0-9]{4}-[0-9]{2}-[0-9]{2}|^# [a-z]{3}\/[0-9]{2}\/[0-9]{4}/d}' "$out.tmp" || return 1
   tr -d '\r' < "$out.tmp" > "$out" || return 1
