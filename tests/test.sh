@@ -104,7 +104,9 @@ ok "routers are exported in parallel (${took}s for 8 x 1s)"
 # PARALLEL=1 still works and still reports every failure
 rm "$FAKE/10.1.0.3.rsc" "$FAKE/10.1.0.5.rsc"
 if PARALLEL=1 run; then fail "exit 0 with two unreachable routers"; fi
-grep -q "failed: .*site-03" "$work/log" && grep -q "failed: .*site-05" "$work/log" || fail "not all failures reported: $(tail -1 "$work/log")"
+if ! grep -q "failed: .*site-03" "$work/log" || ! grep -q "failed: .*site-05" "$work/log"; then
+  fail "not all failures reported: $(tail -1 "$work/log")"
+fi
 ok "with PARALLEL=1 every failed router is still reported"
 
 # RouterOS 6: falls back to hide-sensitive instead of storing a syntax error
