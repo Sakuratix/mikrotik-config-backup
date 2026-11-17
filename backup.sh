@@ -5,6 +5,7 @@
 #   routers.txt:  name  host  [port]
 #   env: BACKUP_REPO (git working copy), SSH_USER (default: backup), SSH_KEY (default: ~/.ssh/id_ed25519)
 #        PARALLEL (default: 8) routers exported at the same time
+#        METRICS_DIR (default: /var/lib/node_exporter/textfile) Prometheus textfile metrics, skipped if missing
 set -Eeuo pipefail
 
 ROUTERS="${ROUTERS:-$(dirname "$0")/routers.txt}"
@@ -12,6 +13,7 @@ BACKUP_REPO="${BACKUP_REPO:?BACKUP_REPO is required}"
 SSH_USER="${SSH_USER:-backup}"
 SSH_KEY="${SSH_KEY:-$HOME/.ssh/id_ed25519}"
 PARALLEL="${PARALLEL:-8}"
+METRICS_DIR="${METRICS_DIR:-/var/lib/node_exporter/textfile}"
 state="$(mktemp -d)"
 trap 'rm -rf "$state"' EXIT
 
@@ -70,6 +72,27 @@ wait
 failed=()
 for f in "$state"/fail.*; do [[ -e $f ]] && failed+=("${f##*/fail.}"); done
 
+write_metrics() {  # one series per router, for node_exporter's textfile collector
+  [[ -d "$METRICS_DIR" ]] || return 0
+  local out="$METRICS_DIR/mikrotik_backup.prom" f r now
+  now="$(date +%s)"
+  {
+    echo "# HELP mikrotik_backup_success Last export of this router succeeded (1) or failed (0)."
+    echo "# TYPE mikrotik_backup_success gauge"
+    for f in "$state"/ok.* "$state"/fail.*; do
+      [[ -e $f ]] || continue
+      r="${f##*/}"
+      echo "mikrotik_backup_success{router=\"${r#*.}\"} $([[ $r == ok.* ]] && echo 1 || echo 0)"
+    done
+    echo "# HELP mikrotik_backup_last_run_timestamp_seconds When the backup last ran."
+    echo "# TYPE mikrotik_backup_last_run_timestamp_seconds gauge"
+    echo "mikrotik_backup_last_run_timestamp_seconds $now"
+    echo "# HELP mikrotik_backup_changed_routers Routers whose config changed in the last run."
+    echo "# TYPE mikrotik_backup_changed_routers gauge"
+    echo "mikrotik_backup_changed_routers ${changed:-0}"
+  } > "$out.$$" && mv "$out.$$" "$out"
+}
+
 # Commit body: per router, lines added/removed and which RouterOS menus changed,
 # so `git log` answers "what changed on core-01 last night" without opening diffs.
 summary() {
@@ -94,12 +117,15 @@ summary() {
 cd "$BACKUP_REPO"
 git add -A
 if ! git diff --cached --quiet; then
+  changed="$(git diff --cached --name-only | grep -c '\.rsc$' || true)"
   git commit -q -m "config backup $(date -u +%F): $(git diff --cached --name-only | tr '\n' ' ')" -m "$(summary)"
   git push -q
   log "changes committed"
 else
   log "no changes"
 fi
+
+write_metrics
 
 if (( ${#failed[@]} )); then
   log "failed: ${failed[*]}"; exit 1

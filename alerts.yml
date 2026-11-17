@@ -1,0 +1,13 @@
+# Prometheus rules for backup.sh's textfile metrics (node_exporter --collector.textfile.directory)
+groups:
+  - name: mikrotik-config-backup
+    rules:
+      - alert: MikrotikBackupFailed
+        expr: mikrotik_backup_success == 0
+        for: 1h   # one flaky night is noise; a router that keeps failing is not
+        labels: { severity: warning }
+        annotations: { summary: "config of {{ $labels.router }} is not being backed up" }
+      - alert: MikrotikBackupNotRunning
+        expr: time() - mikrotik_backup_last_run_timestamp_seconds > 26 * 3600
+        labels: { severity: warning }
+        annotations: { summary: "the MikroTik config backup has not run for more than 26h" }

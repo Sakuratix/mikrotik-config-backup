@@ -35,7 +35,8 @@ git -C "$work/repo" config user.email test@example.com
 git -C "$work/repo" config user.name test
 git -C "$work/repo" commit -q --allow-empty -m init
 git -C "$work/repo" push -q origin HEAD 2>/dev/null
-export BACKUP_REPO="$work/repo" SSH_KEY=/dev/null ROUTERS="$work/routers.txt"
+mkdir -p "$work/metrics"
+export BACKUP_REPO="$work/repo" SSH_KEY=/dev/null ROUTERS="$work/routers.txt" METRICS_DIR="$work/metrics"
 commits() { git -C "$work/repo" rev-list --count HEAD; }
 run() { "$root/backup.sh" 2>"$work/log"; }
 
@@ -82,7 +83,10 @@ grep -q "FAIL club-02" "$work/log" || fail "failure not logged"
 grep -q "192.168.200.1" "$work/repo/core-01.rsc" || fail "healthy router not backed up"
 grep -q "192.168.2.1" "$work/repo/club-02.rsc" || fail "last good config of the failed router was lost"
 [[ ! -e "$work/repo/club-02.rsc.tmp" ]] || fail "temp file left behind"
-ok "an unreachable router fails the run but keeps its last good config"
+grep -q 'mikrotik_backup_success{router="club-02"} 0' "$work/metrics/mikrotik_backup.prom" || fail "failure metric"
+grep -q 'mikrotik_backup_success{router="core-01"} 1' "$work/metrics/mikrotik_backup.prom" || fail "success metric"
+grep -q 'mikrotik_backup_changed_routers 1' "$work/metrics/mikrotik_backup.prom" || fail "changed metric"
+ok "an unreachable router fails the run but keeps its last good config, metrics say which"
 
 # parallel: 6 routers that each take 1s finish in ~1s, not 6s
 for i in 1 2 3 4 5 6; do
