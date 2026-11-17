@@ -70,10 +70,31 @@ wait
 failed=()
 for f in "$state"/fail.*; do [[ -e $f ]] && failed+=("${f##*/fail.}"); done
 
+# Commit body: per router, lines added/removed and which RouterOS menus changed,
+# so `git log` answers "what changed on core-01 last night" without opening diffs.
+summary() {
+  local f
+  git diff --cached --name-only | while read -r f; do
+    git diff --cached --numstat -- "$f" | awk -v f="$f" '{printf "%s: +%s -%s", f, $1, $2}'
+    git diff --cached -U0 -- "$f" | awk '
+      /^[+-]\// && !/^(\+\+\+|---) / {
+        path = ""
+        for (i = 1; i <= NF; i++) {
+          w = (i == 1) ? substr($i, 2) : $i
+          if (w ~ /=/ || w ~ /^(add|set|remove|enable|disable)$/) break
+          path = path (path == "" ? "" : " ") w
+        }
+        if (!(path in seen)) { seen[path] = 1; list = list (list == "" ? "" : ", ") path }
+      }
+      END { if (list != "") printf " (%s)", list }'
+    echo
+  done
+}
+
 cd "$BACKUP_REPO"
 git add -A
 if ! git diff --cached --quiet; then
-  git commit -q -m "config backup $(date -u +%F): $(git diff --cached --name-only | tr '\n' ' ')"
+  git commit -q -m "config backup $(date -u +%F): $(git diff --cached --name-only | tr '\n' ' ')" -m "$(summary)"
   git push -q
   log "changes committed"
 else

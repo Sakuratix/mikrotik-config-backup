@@ -70,7 +70,9 @@ run || fail "third run failed"
 [[ $(commits) == 3 ]] || fail "real change not committed"
 msg=$(git -C "$work/repo" log -1 --format=%s)
 [[ $msg == *core-01.rsc* && $msg != *club-02* ]] || fail "commit message: $msg"
-ok "a real change is committed with the router name in the message"
+body=$(git -C "$work/repo" log -1 --format=%b)
+[[ $body == "core-01.rsc: +1 -1 (/ip address)" ]] || fail "commit body: $body"
+ok "a real change is committed with the router name and the changed menus"
 
 # unreachable router: exit 1, others still backed up, last good file kept
 rm "$FAKE/10.0.0.2.rsc"
