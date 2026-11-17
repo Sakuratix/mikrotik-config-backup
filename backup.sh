@@ -5,6 +5,7 @@
 #   routers.txt:  name  host  [port]
 #   env: BACKUP_REPO (git working copy), SSH_USER (default: backup), SSH_KEY (default: ~/.ssh/id_ed25519)
 #        PARALLEL (default: 8) routers exported at the same time
+#        PRUNE_REMOVED=1 delete <name>.rsc of routers no longer in routers.txt (git keeps the history)
 #        METRICS_DIR (default: /var/lib/node_exporter/textfile) Prometheus textfile metrics, skipped if missing
 set -Eeuo pipefail
 
@@ -60,8 +61,10 @@ run_one() {  # runs in the background; leaves a marker file with the result
 # One slow or dead site used to hold up the whole run for its SSH timeout;
 # now up to $PARALLEL routers are exported at once.
 running=0
+listed=()
 while read -r name host port; do
   [[ -z "${name:-}" || "$name" == \#* ]] && continue
+  listed+=("$name")
   run_one "$name" "$host" "${port:-22}" &
   if (( ++running >= PARALLEL )); then
     wait -n; running=$((running - 1))
@@ -115,6 +118,16 @@ summary() {
 }
 
 cd "$BACKUP_REPO"
+# A decommissioned router's last config would otherwise sit in the tree forever,
+# looking current. Deleting it is safe: `git log --all -- old.rsc` still has it.
+if [[ "${PRUNE_REMOVED:-0}" == 1 ]]; then
+  for f in *.rsc; do
+    [[ -e $f ]] || continue
+    if [[ " ${listed[*]} " != *" ${f%.rsc} "* ]]; then
+      log "removed from routers.txt, deleting $f"; git rm -q -- "$f"
+    fi
+  done
+fi
 git add -A
 if ! git diff --cached --quiet; then
   changed="$(git diff --cached --name-only | grep -c '\.rsc$' || true)"

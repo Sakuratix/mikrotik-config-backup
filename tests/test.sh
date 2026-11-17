@@ -131,4 +131,15 @@ PARALLEL=8 run || true
 grep -q "name=wg0" "$work/repo/core-01.rsc" || fail "clean export not written"
 ok "clean exports pass the secret check"
 
+# a router removed from routers.txt: kept by default, deleted with PRUNE_REMOVED=1
+grep -v '^site-06' "$ROUTERS" > "$work/r" && mv "$work/r" "$ROUTERS"
+PARALLEL=8 run || true
+[[ -e "$work/repo/site-06.rsc" ]] || fail "removed router deleted without PRUNE_REMOVED"
+PRUNE_REMOVED=1 PARALLEL=8 run || true
+[[ ! -e "$work/repo/site-06.rsc" ]] || fail "PRUNE_REMOVED=1 kept site-06.rsc"
+[[ -e "$work/repo/core-01.rsc" ]] || fail "PRUNE_REMOVED=1 deleted a listed router"
+git -C "$work/repo" log -1 --format=%B | grep -q "site-06.rsc" || fail "deletion not committed"
+git -C "$work/repo" show HEAD~1:site-06.rsc | grep -q 10.9.0.6 || fail "history of the removed router lost"
+ok "routers removed from routers.txt are deleted only with PRUNE_REMOVED=1, history kept"
+
 echo "$pass tests passed"
